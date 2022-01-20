@@ -1,0 +1,2 @@
+marshmallow_dataclass==8.3.2
+marshmallow-enum==1.5.1
