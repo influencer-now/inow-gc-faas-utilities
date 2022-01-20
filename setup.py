@@ -2,8 +2,9 @@
 from setuptools import setup, find_packages
 
 _requirements = {
-    "faas-job": ["marshmallow_dataclass==8.3.2", "marshmallow-enum==1.5.1"],
+    "base": ["marshmallow_dataclass==8.3.2", "marshmallow-enum==1.5.1"],
     "datastore": ["google-cloud-datastore==2.4.0"],
+    "comm": ["requests", "google-cloud-pubsub==2.9.0"]
 }
 
 
@@ -15,8 +16,8 @@ def _join_arrays(*args):
 
 
 setup(
-    name="inow-gc-faas-utils",
-    version="0.0.1",
+    name="inowfaasutils",
+    version="0.0.2",
     description="Influencer Now Google Cloud FaaS Utilities",
     author="Iván Huerta",
     author_email="contacto@influencernow.cl",
@@ -24,8 +25,9 @@ setup(
     packages=find_packages(),
     extras_require={
         "all": _join_arrays(_requirements.values()),
-        "faas-job": _requirements["faas-job"],
-        "datastore": _requirements["datastore"],
+        "faasjob": _requirements["base"] + _requirements["datastore"],
+        "comm": _requirements["base"] + _requirements["comm"],
+        "datastore": _requirements["base"] + _requirements["datastore"],
     },
     zip_safe=False,
     python_requires=">=3.8",

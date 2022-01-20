@@ -24,9 +24,9 @@ class FaasJobManager(metaclass=Singleton):
     executed FaaS operations, and help to implement architectures like Fan-in and Fan-out.
 
     Usage:
-        >>> from inow-gc-faas-utilities.faas-job import FaasJobManager
+        >>> from inowfaasutils.faasjob import FaasJobManager
         >>> job_id = input_job_id # None if it is new one
-        >>> with FaasJobManager().job_init() as fjm:
+        >>> with FaasJobManager().job_init(job_id) as fjm:
         >>>     logger.info("An initial metadata is created at this point with current task")
         >>>     fjm.add_task()
         >>>     call_faas_async_op("cool_operator")
