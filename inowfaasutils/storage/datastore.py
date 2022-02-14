@@ -1,5 +1,5 @@
 from typing import Optional
-from xml.dom.minidom import Entity
+from google.cloud.datastore.entity import Entity
 from google.cloud import datastore
 
 from ..misc.singleton import Singleton
@@ -43,6 +43,24 @@ class DataStoreClient(metaclass=Singleton):
             print(ex.__traceback__)
             return False
 
+    def get_entity(self, entity: str, id: str) -> Optional[Entity]:
+        """Get entity from DataStore
+
+        Args:
+            entity (str): entity name
+            id (str): indexed id
+
+        Returns:
+            Optional[Entity]: entity. None if not found
+        """
+        try:
+            item: Entity
+            key = self._client.key(entity, id)
+            item = self._client.get(key)
+            return item
+        except Exception:
+            return None
+
     def increment_cnt_with_id(
         self, entity: str, id: str, cnt_field: str, step: int
     ) -> Optional[Entity]:
@@ -55,12 +73,11 @@ class DataStoreClient(metaclass=Singleton):
             step (int): quantity to be incremented
 
         Returns:
-            Optional[Entity]: entity with increment
+            Optional[Entity]: entity with increment.
+            None if not found
         """
         try:
-            item: Entity
-            key = self._client.key(entity, id)
-            item = self._client.get(key)
+            item = self.get_entity(entity, id)
             item[cnt_field] += step
             return item
         except Exception:
@@ -77,7 +94,8 @@ class DataStoreClient(metaclass=Singleton):
             step (int): quantity to be incremented
 
         Returns:
-            Optional[Entity]: entity with increment
+            Optional[Entity]: entity with increment.
+            None if not found
         """
         try:
             item[cnt_field] += step

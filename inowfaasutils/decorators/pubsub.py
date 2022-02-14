@@ -22,7 +22,11 @@ def pubsub_input(req_model: Type[Request]):
         def wrapper(event, context):
             pubsub_msg = base64.b64decode(event["data"]).decode("utf-8")
             req = req_model.Schema().loads(pubsub_msg)
-            return function(req)
+            res = function(req)
+            # if not callback or callback.callback_function(res):
+            #     return
+            # else:
+            #     raise CallbackRunError()
 
         return wrapper
 

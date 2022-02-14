@@ -1,0 +1,2 @@
+class CallbackRunError(Exception):
+    pass
