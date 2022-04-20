@@ -153,7 +153,7 @@ class FaasJobManager(metaclass=Singleton):
                 job_data = self.datastore.increment_cnt_with_id(
                     self.job_entity, self.job_id, "total_tasks", self.new_tasks_cnt
                 )
-                if _task_state == FaasOpState.ERR:
+                if _task_state != FaasOpState.ERR:
                     job_data = self.datastore.increment_cnt_with_entity(
                         job_data, "ended_tasks", 1
                     )
