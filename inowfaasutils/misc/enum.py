@@ -7,9 +7,9 @@ class CallbackType(Enum):
 
 
 class FaasOpState(Enum):
-    CRTD = "created"
+    CRTD = "CRTD"
     """created state"""
-    ERR = "error"
+    ERR = "ERR"
     """error state"""
-    SCCS = "success"
+    SCCS = "SCCS"
     """success state"""

@@ -1,8 +1,9 @@
 from marshmallow_dataclass import dataclass
-
-from typing import Optional, Dict
+from typing import List, Optional, Any
 
 from ..misc.enum import FaasOpState
+
+from google.cloud.firestore import CollectionReference
 
 
 @dataclass
@@ -13,41 +14,43 @@ class FaasProcess:
 
 
 @dataclass
-class FaasTaskState:
-    """State of running task, using as reference the `ref_pow` values, which
-    is a contiguous incremental index"""
-
-    state: FaasOpState
-    parent_ref: Optional[int]
-    name: str
-
-
-@dataclass
 class FaasJob:
     """State of execution of nested FaaS functions, where each function operation
-    execution is called task"""
+    execution is called job"""
 
-    ref_creation_id: Optional[str]
-    """creation reference id, for callback response body message"""
-    process_id: Optional[str]
+    name: str
+    args: Optional[Any]
+    op_id: Optional[str]
+    state: FaasOpState
     start_date: int
     end_date: Optional[int]
-    total_tasks: int
-    error_tasks: int
-    ended_tasks: int
-    ref_pow_diff: int
-    ref_pow: int
-    tasks_info: Dict[str, FaasTaskState]
+    total_jobs: int
+    ended: Optional[bool]
 
 
 @dataclass
 class FaasError:
     """Error data used to send on an error callback event"""
 
-    task_ref: int
-    task_name: Optional[str]
-    err_date: int
+    job_name: Optional[str]
+    date: int
     job_id: Optional[str]
-    process_id: Optional[str]
     exception_class: str
     exception_message: str
+    exception_file: str
+    exception_line: int
+
+
+@dataclass
+class FaasJobTrigger:
+    """FaaS job trigger for"""
+
+    name: str
+    message: dict
+    queue: str
+    _job: Optional[FaasJob] = None
+    """FaasJob added when the job is triggered"""
+    _collection: Optional[CollectionReference] = None
+    """Firestore collection reference"""
+    _job_id: Optional[str] = None
+    """Job id in job subcollection"""

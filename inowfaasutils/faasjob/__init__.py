@@ -1,264 +1,340 @@
 from __future__ import annotations
 
 import datetime
-import math
 import uuid
 import os
 import json
 
-from typing import Callable, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from contextlib import contextmanager
-from google.cloud.datastore.entity import Entity
+
+from inowfaasutils.comm.pubsub import PubSubClient
 
 from ..misc.dataclass_helper import asdict
-
-from ..callback.base import BaseCallback
-
-from ..callback import get_callback, get_err_callback
 from ..misc.enum import FaasOpState
-
 from ..misc.model import Request
+from .model import FaasError, FaasJob, FaasJobTrigger
+from ..storage.firestore import FireStoreClient
 
-from ..misc.singleton import Singleton
+from google.cloud.firestore import (
+    DocumentReference,
+)
 
-from .model import FaasError, FaasJob, FaasTaskState
-from ..storage.datastore import DataStoreClient
-
-_INIT_TASKS_TOTAL = 1
-_INIT_TASKS_ENDED = 0
-_INIT_REF_POW = 1
-_INIT_REF_POW_DIFF = 2
+_INIT_JOBS_TOTAL = 1
 
 
-class FaasJobManager(metaclass=Singleton):
-    """Job completion metadata manager. It is a singleton class used for storing, no creo que Tania me suba el sueldo a 4 palos, que es lo que podría ganar en algo afuera
+class FaasJobManager:
+    """Job completion metadata manager. It is a singleton class used for storing information of nested
+    executed FaaS operations, and help to implement architectures like Fan-in and Fan-out.
+
+    Usage:
+        >>> from inow-gc-faas-utilities.faasjob import FaasJobManager
+        >>> from inow-gc-faas-utilities.misc.model import Request
+        >>> job_name = "my_job_1"
+        >>> req = Request
+        >>> with FaasJobManager().job_init(req, job_name) as fjm:
+        >>>     logger.info("An initial metadata is created at this point with current job")
+        >>>     fjm.add_job()
         >>>     call_faas_async_op("cool_operator")
         >>> logger.info("Metadata is updated once with block ends")
 
-    Once all related tasks are finished, end_date is updated with epoch representation (in seconds)
+    Once all related jobs are finished, end_date is updated with epoch representation (in seconds)
     """
 
-    datastore: DataStoreClient
-    job_entity: str = ""
-    """job entity name in datastore"""
-    process_entity: str = ""
-    """process entity name in datastore"""
-    job_id: str
-    process_id: str
-
     def __init__(self):
-        if os.environ.get("FAAS_JOB_ENTITY_NAME"):
-            self.job_entity = os.environ.get("FAAS_JOB_ENTITY_NAME")
-        else:
-            raise KeyError("FAAS_JOB_ENTITY_NAME not found in environment variables")
-        if os.environ.get("FAAS_PROCESS_ENTITY_NAME"):
-            self.process_entity = os.environ.get("FAAS_PROCESS_ENTITY_NAME")
-        else:
-            raise KeyError(
-                "FAAS_PROCESS_ENTITY_NAME not found in environment variables"
-            )
-        GC_PROJECT_ID: str
-        if os.environ.get("GC_PROJECT_ID"):
-            GC_PROJECT_ID = os.environ.get("GC_PROJECT_ID")
-        else:
-            raise KeyError("GC_PROJECT_ID not found in environment variables")
-        self.datastore = DataStoreClient(GC_PROJECT_ID)
-        self.new_tasks_cnt = 0
+        self.job_collection_name: str = ""
+        """job collection name in firestore"""
+        self.remaining_job_collection_name: str = ""
+        """remaining job metadata collection name in firestore"""
+        self.failed_job_collection_name: str = ""
+        """failed job metadata collection name in firestore"""
+
+        self._init_envs()
+        self.firestore: FireStoreClient = FireStoreClient(self.GC_PROJECT_ID)
+        self.new_jobs_cnt = 0
         self.diff_increment = 0
-        self.job_id = None
-        self.process_id = None
+        self.job_id: Optional[str] = None
+        self.op_id: Optional[str] = None
+        self.faas_trigger_queue: List[FaasJobTrigger] = []
+        self.job_parent_idx_list: List[int] = []
+        self.job_done_collection: Optional[str] = None
 
-    @contextmanager
-    def job_init(
-        self,
-        req: Request = None,
-        trace_states: bool = True,
-        task_name: Optional[str] = "default",
-    ):
-        """Initialize job metadata execution storage
+    def _init_envs(self):
+        """Init all environment variables needed to initialize this class
 
-        Args:
-            req (str, Request): base Faas Job request.
-            trace_states (bool, optional): wether success or error states of each execution
-            should be saved. Defaults to True.
-            task_name: name of the task for traceability option. Defaults to 'default'.
-
-        Yields:
-            FaasJobManager: [description]
+        Raises:
+            KeyError: key error if environment not found
         """
 
-        _task_state = FaasOpState.CRTD
-        _end_job: Callable[[Entity], None]
-        _err_exception: Exception
-
-        err_callback: BaseCallback
-
-        if req.callback_type:
-
-            callback = get_callback(req)
-
-            @callback.add_callback
-            def _end_job(job_data: Entity):
-                job_data["end_date"] = self._epoch_now()
-                return job_data
-
+        if os.environ.get("FAAS_JOB_COLLECTION_NAME"):
+            self.job_collection_name = os.environ.get("FAAS_JOB_COLLECTION_NAME")
         else:
-
-            def _end_job(job_data: Entity):
-                job_data["end_date"] = self._epoch_now()
-                return job_data
-
-        try:
-            if req.job_id is None:
-                self.job_id = (str)(uuid.uuid4())
-                self._upsert(
-                    self.job_id,
-                    process_id=req.process_id,
-                    ref_creation_id=req.job_ref_creation_id,
-                    trace=trace_states,
-                    tasks_state=FaasTaskState(
-                        state=_task_state,
-                        parent_ref=req.task_parent_ref,
-                        name=task_name,
-                    ),
-                )
-                self.ref_pow = _INIT_REF_POW
-                self.diff_increment = _INIT_REF_POW_DIFF
-            else:
-                self.job_id = req.job_id
-                with self.datastore.client.transaction():
-                    job_data = self.datastore.increment_cnt_with_id(
-                        self.job_entity, self.job_id, "ref_pow", 1
-                    )
-                    self.ref_pow = job_data["ref_pow"]
-                    self.diff_increment = math.pow(2, self.ref_pow)
-                    self.datastore.increment_cnt_with_entity(
-                        job_data, "ref_pow_diff", self.diff_increment
-                    )
-                    self.datastore.client.put(job_data)
-            yield self
-        except Exception as ex:
-            _err_exception = ex
-            _task_state = FaasOpState.ERR
-            err_callback = get_err_callback(req)
-        finally:
-            if _task_state != FaasOpState.ERR:
-                _task_state = FaasOpState.SCCS
-
-            with self.datastore.client.transaction():
-
-                _multi_data = list()
-                process_data: Optional[Entity]
-
-                job_data = self.datastore.increment_cnt_with_id(
-                    self.job_entity, self.job_id, "total_tasks", self.new_tasks_cnt
-                )
-                if _task_state != FaasOpState.ERR:
-                    job_data = self.datastore.increment_cnt_with_entity(
-                        job_data, "ended_tasks", 1
-                    )
-                else:
-                    job_data = self.datastore.increment_cnt_with_entity(
-                        job_data, "error_tasks", 1
-                    )
-                job_data = self.datastore.increment_cnt_with_entity(
-                    job_data, "ref_pow_diff", -self.diff_increment
-                )
-
-                if job_data["ref_pow_diff"] == 0 and (
-                    job_data["ended_tasks"] + job_data["error_tasks"]
-                    == job_data["total_tasks"]
-                ):
-                    _end_job(job_data)
-
-                    if self.process_id is not None and process_data is None and trace_states:
-                        process_data = self.datastore.get_entity(
-                            self.process_entity, self.process_id
-                        )
-                        process_data["jobs_state"][self.job_id] = (
-                            FaasOpState.SCCS
-                            if job_data["error_tasks"] == 0
-                            else FaasOpState.ERR
-                        )
-                        _multi_data.append(process_data)
-
-                job_data["tasks_info"][str(self.ref_pow)]["state"] = _task_state.name
-
-                _multi_data.append(job_data)
-
-                self.datastore.client.put_multi(_multi_data)
-
-        if _task_state == FaasOpState.ERR and err_callback is not None:
-            err_data = FaasError(
-                task_ref=self.ref_pow,
-                task_name=task_name,
-                err_date=self._epoch_now(),
-                job_id=self.job_id,
-                process_id=self.process_id,
-                exception_class=_err_exception.__class__.__name__,
-                exception_message=str(_err_exception),
+            raise KeyError(
+                "FAAS_JOB_COLLECTION_NAME not found in environment variables"
             )
-            err_callback.callback_function(FaasError.Schema().dump(err_data))
+        if os.environ.get("FAAS_JOB_COLLECTION_NAME"):
+            self.failed_job_collection_name = os.environ.get(
+                "FAAS_FAILED_JOB_COLLECTION_NAME"
+            )
+        else:
+            raise KeyError(
+                "FAAS_FAILED_JOB_COLLECTION_NAME not found in environment variables"
+            )
+        if os.environ.get("FAAS_JOB_COLLECTION_NAME"):
+            self.remaining_job_collection_name = os.environ.get(
+                "FAAS_REMAINING_JOB_COLLECTION_NAME"
+            )
+        else:
+            raise KeyError(
+                "FAAS_REMAINING_JOB_COLLECTION_NAME not found in environment variables"
+            )
+        if os.environ.get("GC_PROJECT_ID"):
+            self.GC_PROJECT_ID = os.environ.get("GC_PROJECT_ID")
+        else:
+            raise KeyError("GC_PROJECT_ID not found in environment variables")
 
-    def add_task(self):
-        """Increments total tasks counter on FaasJob metadata"""
-        self.new_tasks_cnt += 1
+    def _generate_faas_error(self, job_name: str, err: Exception) -> FaasError:
+        """Generate FaaS error metadata representation
 
-    def _upsert(
+        Args:
+            job_name: name of the job for traceability option
+            err (Exception, optional): Exception raised on execution
+
+        Returns:
+            FaasError: FaaS error metadata representation
+        """
+
+        return FaasError(
+            job_name=job_name,
+            date=self._epoch_now(),
+            job_id=self.job_id,
+            exception_class=err.__class__.__name__,
+            exception_message=str(err),
+            exception_file=err.__traceback__.tb_frame.f_code.co_filename,
+            exception_line=err.__traceback__.tb_lineno,
+        )
+
+    def _trigger_faas_queue(self):
+        """Enqueue all FaaS calls in the corresponding topics"""
+
+        queue_msgs: Dict[str, List[str]] = dict()
+        while len(self.faas_trigger_queue):
+            faas_trigger = self.faas_trigger_queue.pop()
+            faas_trigger._collection.document(faas_trigger._job_id).set(
+                asdict(faas_trigger._job)
+            )
+            if not queue_msgs.get(faas_trigger.queue):
+                queue_msgs[faas_trigger.queue] = []
+            queue_msgs[faas_trigger.queue].append(json.dumps(faas_trigger.message))
+        for queue, msgs in queue_msgs.items():
+            pubsub = PubSubClient(self.GC_PROJECT_ID, queue)
+            pubsub.send_messages(msgs)
+
+    def _job_close(
+        self,
+        job_name: str,
+        req: Request,
+        curr_state: FaasOpState,
+        err: Exception = None,
+    ):
+        """Action after job has been executed
+
+        Args:
+            job_name (str): name assigned to job
+            req (Request): base Faas Job request
+            curr_state (FaasOpState): current state of job execution
+            err (Exception, optional): Exception raised on execution. Defaults to None.
+        """
+
+        state = FaasOpState.SCCS if curr_state != FaasOpState.ERR else FaasOpState.ERR
+
+        root_doc: FaasJob = FaasJob.Schema().load(
+            self.firestore.get_document_snapshot(
+                self.job_collection_name, self.job_id
+            ).to_dict()
+        )
+
+        root_doc_ref = self.firestore.get_document_ref(
+            self.job_collection_name, self.job_id
+        )
+
+        job_data: FaasJob
+        upsert_job_id: str
+        if len(self.job_parent_idx_list) > 0:
+            parent_doc_ref = self.firestore.get_document_ref(
+                self.job_collection_name,
+                self.job_id,
+                shard_collection_name=self.job_collection_name,
+                shard_idx_list=self.job_parent_idx_list[:-1],
+            )
+            job_data = FaasJob.Schema().load(
+                self.firestore.increment_cnt_with_id(
+                    self.job_collection_name,
+                    self.job_id,
+                    "total_jobs",
+                    self.new_jobs_cnt,
+                    shard_collection_name=self.job_collection_name,
+                    shard_idx_list=self.job_parent_idx_list,
+                ).to_dict()
+            )
+            upsert_job_id = str(self.job_parent_idx_list[-1]) 
+        else:
+            parent_doc_ref = None
+            root_doc.total_jobs += self.new_jobs_cnt
+            job_data = root_doc
+            upsert_job_id = self.job_id
+
+        job_data.state = state
+
+        if state == FaasOpState.ERR:
+            err_data = self._generate_faas_error(job_name, err)
+            self._insert_failed(self.job_id, self.op_id, err_data)
+            self.finish_job(req, root_doc, FaasOpState.ERR)
+        elif len(self.faas_trigger_queue) > 0:
+            self._trigger_faas_queue()
+
+        self._delete_remaining(self.job_id, self.op_id)
+
+        if (
+            not root_doc.ended
+            and not self.firestore.has_documents(
+                self.remaining_job_collection_name, root_doc_ref
+            )
+            and not self.firestore.has_documents(
+                self.failed_job_collection_name, root_doc_ref
+            )
+        ):
+            self.finish_job(req, root_doc, FaasOpState.SCCS)
+
+        job_data.end_date = self._epoch_now()
+        self._upsert_job(data=job_data, job_id=upsert_job_id, parent_document=parent_doc_ref)
+
+    def _get_or_default_job(
         self,
         data: FaasJob = None,
-        process_id: str = None,
-        ref_creation_id: str = None,
-        trace: bool = True,
-        tasks_state: FaasTaskState = None,
+        name: str = None,
+        args: Any = None,
+        op_id: str = None,
+    ) -> FaasJob:
+        """Get FaasJob object given its data. if no data is provideed, then a
+        default new FaaSJob is retured.
+
+        Args:
+            data (FaasJob, optional): FaasJob data. Defaults to None.
+            name (str, optional): name to set on default FaasJob. Defaults to None.
+            args (Any, optional): faas job request input. Defaults to None.
+            op_id (str, optional): operation id. Used to check remaining and failed jobs.
+            Defaults to None.
+        Returns:
+            FaasJob: Description of FaaS Job execution
+        """
+
+        default_op_id = op_id if op_id is not None else self.op_id
+        job = (
+            FaasJob(
+                name=name,
+                state=FaasOpState.CRTD,
+                start_date=self._epoch_now(),
+                op_id=default_op_id,
+                end_date=None,
+                ended=None,
+                total_jobs=_INIT_JOBS_TOTAL,
+                args=args,
+            )
+            if data is None
+            else data
+        )
+        return job
+
+    def _upsert_job(
+        self,
+        data: FaasJob = None,
+        name: str = None,
+        args: Any = None,
+        job_id: str = None,
+        parent_document: Optional[DocumentReference] = None,
     ) -> Tuple[str, FaasJob]:
-        """Upsert faas job execution metadata into DataStore `job` entity
+        """Upsert faas job execution metadata into FireStore `job` collection
 
         Args:
             data (Job, optional): faas job execution metadata to be override.
             Defaults to None.
-            process_id (str, optional): faas job process id, None if there
-            is none. Defaults to None.
-            ref_creation_id (str, optional): reference creation id, for external
-            source integration. Defaults to None.
-            trace (bool, optional): True if traceability is required.
-            Defaults to True
-            tasks_state (FaasOpState, optional): set task state if trace is active.
+            name (str, optional): faas job first job name. Defaults to None.
+            args (Any, optional): faas job request input. Defaults to None.
+            parent_document (Optional[DocumentReference]): parent document for nested collections.
             Defaults to None.
         Returns:
-            Tuple[str, Job]: id and faas job execution metadata
+            Tuple[str, FaasJob]: id and faas job execution metadata
         """
-        job = (
-            FaasJob(
-                ref_creation_id=ref_creation_id,
-                process_id=process_id,
-                start_date=self._epoch_now(),
-                end_date=None,
-                total_tasks=_INIT_TASKS_TOTAL,
-                error_tasks=0,
-                ended_tasks=_INIT_TASKS_ENDED,
-                ref_pow=_INIT_REF_POW,
-                ref_pow_diff=_INIT_REF_POW_DIFF,
-                tasks_info=Entity(),
-            )
-            if data is not None
-            else data
+
+        job = self._get_or_default_job(data, name, args)
+        job_dict = asdict(job)
+        self.firestore.upsert(
+            self.job_collection_name,
+            job_id,
+            job_dict,
+            parent_document=parent_document,
         )
-        if trace:
-            task_state_dict: dict = asdict(tasks_state)
-            task_state_entity = Entity(
-                exclude_from_indexes=tuple(task_state_dict.keys())
-            )
-            task_state_entity.update(task_state_dict)
-            job.tasks_info[str(job.ref_pow)] = task_state_entity
-            tasks_info_entity = Entity(
-                exclude_from_indexes=tuple(job.tasks_info.keys())
-            )
-            tasks_info_entity.update(job.tasks_info)
-            job_dict = asdict(job)
-            job_dict["tasks_info"] = tasks_info_entity
-        self.datastore.upsert(self.job_entity, self.job_id, job_dict)
-        return (self.job_id, job)
+        return (job_id, job)
+
+    def _insert_remaining(self, job_id: str, op_id: str) -> Tuple[str, dict]:
+        """Insert faas job remaining execution metadata into FireStore `job.remaining` collection
+
+        Args:
+            job_id (str): faas job root job_id
+            op_id (str): current faas job op_id
+        Returns:
+            Tuple[str, dict]: id and faas job remaining execution metadata
+        """
+
+        doc_ref = self.firestore.get_document_ref(self.job_collection_name, job_id)
+        self.firestore.upsert(self.remaining_job_collection_name, op_id, {}, doc_ref)
+        return (self.op_id, {})
+
+    def _insert_job_done(self, job_done_collection: str, job_args: dict, status: FaasOpState) -> Tuple[str, dict]:
+        data = {"args": job_args, "status": status.value}
+        self.firestore.upsert(job_done_collection, self.job_id, data, None)
+        return (self.op_id, data)
+
+
+    def _delete_remaining(self, job_id: str, op_id: Optional[str]) -> bool:
+        """Deletes metadata of remaining job to be executed
+
+        Args:
+            job_id (str): faas job root job_id
+            op_id (str): current faas job op_id
+
+        Returns:
+            bool: True if deleted
+        """
+
+        if op_id is not None:
+            doc_ref = self.firestore.get_document_ref(self.job_collection_name, job_id)
+            remaining_ref: DocumentReference = doc_ref.collection(
+                self.remaining_job_collection_name
+            ).document(op_id)
+            self.firestore.delete_document(remaining_ref)
+        return True
+
+    def _insert_failed(
+        self, job_id: str, op_id: str, data: FaasError
+    ) -> Tuple[str, FaasJob]:
+        """Upsert faas job execution metadata into FireStore `job` collection
+
+        Args:
+            job_id (str): faas job root job_id.
+            op_id (str): current faas job op_id.
+            data (Job, optional): faas job execution metadata to be override.
+            Defaults to None.
+            Tuple[str, FaasError]: id and faas job execution metadata
+        """
+
+        doc_ref = self.firestore.get_document_ref(self.job_collection_name, job_id)
+        self.firestore.upsert(
+            self.failed_job_collection_name, op_id, data.Schema().dump(data), doc_ref
+        )
+
+        return (op_id, data)
 
     @staticmethod
     def _epoch_now() -> int:
@@ -267,4 +343,83 @@ class FaasJobManager(metaclass=Singleton):
         Returns:
             int: time elapsed since epoch
         """
+
         return (int)(datetime.datetime.now().timestamp())
+
+    @contextmanager
+    def job_init(
+        self,
+        req: Request = None,
+        job_name: Optional[str] = "default",
+    ):
+        """Initialize a FaaS job metadata saving into FireStore storage
+
+        Args:
+            req (Request): base Faas Job request.
+            job_name: name of the job for traceability option. Defaults to 'default'.
+
+        Yields:
+            FaasJobManager
+        """
+
+        _job_state = FaasOpState.CRTD
+        _err_exception = None
+
+        try:
+            if req.job_id is None:
+                self.job_id = (str)(uuid.uuid4())
+                self.op_id = None
+                self._upsert_job(name=job_name, job_id=self.job_id, args=req)
+                self.job_parent_idx_list = []
+                self.job_done_collection = req.job_done_collection
+            else:
+                self.job_id = req.job_id
+                self.op_id = req.op_id
+                self.job_parent_idx_list = req.job_child_idx_list
+                self.job_done_collection = req.job_done_collection
+            yield self
+        except Exception as ex:
+            _err_exception = ex
+            _job_state = FaasOpState.ERR
+        finally:
+            self._job_close(job_name, req, _job_state, _err_exception)
+
+    def finish_job(self, req: Request, root_job: FaasJob, status: FaasOpState):
+        """Save a job done information in a firestore collection
+        """
+
+        if req.job_done_collection is not None:
+            self._insert_job_done(req.job_done_collection, root_job.args, status)
+
+    def add_job(self, trigger: FaasJobTrigger):
+        """Increments total jobs counter on FaasJob metadata, add
+        sub job execution tree reference and push a new trigger of FaaSJob
+        into a queue
+
+        Args:
+            trigger (FaasJobTrigger): FaaS job trigger metadata
+        """
+
+        new_idx_list = self.job_parent_idx_list.copy()
+        new_idx_list.append(self.new_jobs_cnt)
+        trigger.message["job_id"] = self.job_id
+        trigger.message["op_id"] = (str)(uuid.uuid4())
+        trigger.message["job_child_idx_list"] = new_idx_list
+        if self.job_done_collection is not None:
+            trigger.message["job_done_collection"] = self.job_done_collection
+        self.new_jobs_cnt += 1
+        self._insert_remaining(self.job_id, trigger.message["op_id"])
+        job_ref = self.firestore.get_document_ref(
+            self.job_collection_name,
+            self.job_id,
+            shard_collection_name=self.job_collection_name,
+            shard_idx_list=self.job_parent_idx_list,
+        )
+        trigger._collection = job_ref.collection(
+            self.job_collection_name
+        )
+        trigger._job = self._get_or_default_job(
+            name=trigger.name, op_id=trigger.message["op_id"], args=trigger.message
+        )
+        trigger._job_id = str(new_idx_list[-1])
+        self.faas_trigger_queue.append(trigger)

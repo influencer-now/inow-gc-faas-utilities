@@ -2,6 +2,7 @@ from typing import List
 from google.cloud import pubsub_v1
 from concurrent import futures
 
+
 class PubSubClient:
     """PubSub client wrapper based on Google's `pubsub_v1` publisher client, to send simple string messages
 

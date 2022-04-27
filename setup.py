@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 _requirements = {
     "base": ["marshmallow_dataclass==8.3.2", "marshmallow-enum==1.5.1"],
-    "datastore": ["google-cloud-datastore==2.4.0"],
+    "datastore": ["google-cloud-firestore==2.4.0"],
     "comm": ["requests", "google-cloud-pubsub==2.9.0"],
 }
 
@@ -17,7 +17,7 @@ def _join_arrays(*args):
 
 setup(
     name="inowfaasutils",
-    version="0.0.3",
+    version="0.0.8",
     description="Influencer Now Google Cloud FaaS Utilities",
     author="Iván Huerta",
     author_email="contacto@influencernow.cl",
