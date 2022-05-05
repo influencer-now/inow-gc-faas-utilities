@@ -58,6 +58,7 @@ class FaasJobManager:
         self.faas_trigger_queue: List[FaasJobTrigger] = []
         self.job_parent_idx_list: List[int] = []
         self.job_done_collection: Optional[str] = None
+        self.username = None
 
     def _init_envs(self):
         """Init all environment variables needed to initialize this class
@@ -369,6 +370,7 @@ class FaasJobManager:
             if req.job_id is None:
                 self.job_id = (str)(uuid.uuid4())
                 self.op_id = None
+                self.username = req.username
                 self._upsert_job(name=job_name, job_id=self.job_id, args=req)
                 self.job_parent_idx_list = []
                 self.job_done_collection = req.job_done_collection
@@ -405,6 +407,7 @@ class FaasJobManager:
         trigger.message["job_id"] = self.job_id
         trigger.message["op_id"] = (str)(uuid.uuid4())
         trigger.message["job_child_idx_list"] = new_idx_list
+        trigger.message["username"] = self.username
         if self.job_done_collection is not None:
             trigger.message["job_done_collection"] = self.job_done_collection
         self.new_jobs_cnt += 1
