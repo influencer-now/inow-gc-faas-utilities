@@ -58,6 +58,7 @@ class FaasJobManager:
         self.faas_trigger_queue: List[FaasJobTrigger] = []
         self.job_parent_idx_list: List[int] = []
         self.job_done_collection: Optional[str] = None
+        self.user_id = None
         self.username = None
 
     def _init_envs(self):
@@ -370,6 +371,7 @@ class FaasJobManager:
             if req.job_id is None:
                 self.job_id = (str)(uuid.uuid4())
                 self.op_id = None
+                self.user_id = req.user_id
                 self.username = req.username
                 self._upsert_job(name=job_name, job_id=self.job_id, args=req)
                 self.job_parent_idx_list = []
@@ -377,6 +379,8 @@ class FaasJobManager:
             else:
                 self.job_id = req.job_id
                 self.op_id = req.op_id
+                self.user_id = req.user_id
+                self.username = req.username
                 self.job_parent_idx_list = req.job_child_idx_list
                 self.job_done_collection = req.job_done_collection
             yield self
@@ -407,6 +411,7 @@ class FaasJobManager:
         trigger.message["job_id"] = self.job_id
         trigger.message["op_id"] = (str)(uuid.uuid4())
         trigger.message["job_child_idx_list"] = new_idx_list
+        trigger.message["user_id"] = self.user_id
         trigger.message["username"] = self.username
         if self.job_done_collection is not None:
             trigger.message["job_done_collection"] = self.job_done_collection

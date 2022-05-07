@@ -5,6 +5,7 @@ from typing import List, Optional
 @dataclass
 class Request:
     """Request base data class"""
+    user_id: Optional[int]
     username: Optional[str]
     job_id: Optional[str]
     op_id: Optional[str]
