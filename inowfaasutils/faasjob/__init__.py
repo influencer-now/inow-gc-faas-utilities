@@ -60,6 +60,7 @@ class FaasJobManager:
         self.job_done_collection: Optional[str] = None
         self.user_id = None
         self.username = None
+        self.job_result = None
 
     def _init_envs(self):
         """Init all environment variables needed to initialize this class
@@ -209,13 +210,14 @@ class FaasJobManager:
             self.finish_job(req, root_doc, FaasOpState.SCCS)
 
         job_data.end_date = self._epoch_now()
-        self._upsert_job(data=job_data, job_id=upsert_job_id, parent_document=parent_doc_ref)
+        self._upsert_job(data=job_data, job_id=upsert_job_id, parent_document=parent_doc_ref, result=self.job_result)
 
     def _get_or_default_job(
         self,
         data: FaasJob = None,
         name: str = None,
         args: Any = None,
+        result: Any = None,
         op_id: str = None,
     ) -> FaasJob:
         """Get FaasJob object given its data. if no data is provideed, then a
@@ -225,6 +227,7 @@ class FaasJobManager:
             data (FaasJob, optional): FaasJob data. Defaults to None.
             name (str, optional): name to set on default FaasJob. Defaults to None.
             args (Any, optional): faas job request input. Defaults to None.
+            result (Any, optional): faas job request result. Defaults to None.
             op_id (str, optional): operation id. Used to check remaining and failed jobs.
             Defaults to None.
         Returns:
@@ -242,6 +245,7 @@ class FaasJobManager:
                 ended=None,
                 total_jobs=_INIT_JOBS_TOTAL,
                 args=args,
+                result=result,
             )
             if data is None
             else data
@@ -253,6 +257,7 @@ class FaasJobManager:
         data: FaasJob = None,
         name: str = None,
         args: Any = None,
+        result: Any = None,
         job_id: str = None,
         parent_document: Optional[DocumentReference] = None,
     ) -> Tuple[str, FaasJob]:
@@ -263,13 +268,14 @@ class FaasJobManager:
             Defaults to None.
             name (str, optional): faas job first job name. Defaults to None.
             args (Any, optional): faas job request input. Defaults to None.
+            result (Any, optional): faas job request result. Defaults to None.
             parent_document (Optional[DocumentReference]): parent document for nested collections.
             Defaults to None.
         Returns:
             Tuple[str, FaasJob]: id and faas job execution metadata
         """
 
-        job = self._get_or_default_job(data, name, args)
+        job = self._get_or_default_job(data, name, args, result)
         job_dict = asdict(job)
         self.firestore.upsert(
             self.job_collection_name,
@@ -293,8 +299,8 @@ class FaasJobManager:
         self.firestore.upsert(self.remaining_job_collection_name, op_id, {}, doc_ref)
         return (self.op_id, {})
 
-    def _insert_job_done(self, job_done_collection: str, job_args: dict, status: FaasOpState) -> Tuple[str, dict]:
-        data = {"args": job_args, "status": status.value}
+    def _insert_job_done(self, job_done_collection: str, job_args: dict, job_result: dict, status: FaasOpState) -> Tuple[str, dict]:
+        data = {"args": job_args, "result": job_result, "status": status.value}
         self.firestore.upsert(job_done_collection, self.job_id, data, None)
         return (self.op_id, data)
 
@@ -395,7 +401,7 @@ class FaasJobManager:
         """
 
         if req.job_done_collection is not None:
-            self._insert_job_done(req.job_done_collection, root_job.args, status)
+            self._insert_job_done(req.job_done_collection, root_job.args, root_job.result, status)
 
     def add_job(self, trigger: FaasJobTrigger):
         """Increments total jobs counter on FaasJob metadata, add
@@ -431,3 +437,11 @@ class FaasJobManager:
         )
         trigger._job_id = str(new_idx_list[-1])
         self.faas_trigger_queue.append(trigger)
+        
+    def set_result(self, result: Any):
+        """Set a result of FaaS Job
+
+        Args:
+            result (Any): result of FaaS Job
+        """
+        self.job_result = result

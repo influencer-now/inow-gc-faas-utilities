@@ -20,6 +20,7 @@ class FaasJob:
 
     name: str
     args: Optional[Any]
+    result: Optional[Any]
     op_id: Optional[str]
     state: FaasOpState
     start_date: int
