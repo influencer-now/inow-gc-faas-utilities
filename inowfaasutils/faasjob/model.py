@@ -1,5 +1,5 @@
 from marshmallow_dataclass import dataclass
-from typing import List, Optional, Any
+from typing import Optional, Any
 
 from ..misc.enum import FaasOpState
 
@@ -19,14 +19,27 @@ class FaasJob:
     execution is called job"""
 
     name: str
+    """name of FaaS Job"""
+    process_id: str
+    """tag for a process the FaaS Job is part of"""
+    parent_job_id: str
+    """operation id of the FaaS Job triggered this (via callback)"""
     args: Optional[Any]
+    """arguments given to FaaS Job when it is triggered"""
     result: Optional[Any]
     op_id: Optional[str]
+    """operational id, to identify a FaaS Job or sub FaaS Job operation"""
     state: FaasOpState
+    """completion state"""
     start_date: int
+    """epoch of when the operation stated"""
     end_date: Optional[int]
+    """epoch of when the operation ended"""
     total_jobs: int
+    """total of operations (this job plus children) the FaaS Job has"""
     ended: Optional[bool]
+    """whether the whole job (this job and every operation in 
+        the tree) has ended"""
 
 
 @dataclass

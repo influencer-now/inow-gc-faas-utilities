@@ -61,6 +61,8 @@ class FaasJobManager:
         self.user_id = None
         self.username = None
         self.job_result = None
+        self.process_id = None
+        self.parent_job_id = None
 
     def _init_envs(self):
         """Init all environment variables needed to initialize this class
@@ -246,6 +248,8 @@ class FaasJobManager:
                 total_jobs=_INIT_JOBS_TOTAL,
                 args=args,
                 result=result,
+                process_id=self.process_id,
+                parent_job_id=self.parent_job_id,
             )
             if data is None
             else data
@@ -379,6 +383,10 @@ class FaasJobManager:
                 self.op_id = None
                 self.user_id = req.user_id
                 self.username = req.username
+                # process id and parent job id must be init
+                # before upsert
+                self.process_id = req.process_id
+                self.parent_job_id = req.parent_job_id
                 self._upsert_job(name=job_name, job_id=self.job_id, args=req)
                 self.job_parent_idx_list = []
                 self.job_done_collection = req.job_done_collection
@@ -387,6 +395,8 @@ class FaasJobManager:
                 self.op_id = req.op_id
                 self.user_id = req.user_id
                 self.username = req.username
+                self.process_id = req.process_id
+                self.parent_job_id = req.parent_job_id
                 self.job_parent_idx_list = req.job_child_idx_list
                 self.job_done_collection = req.job_done_collection
             yield self
@@ -414,6 +424,10 @@ class FaasJobManager:
 
         new_idx_list = self.job_parent_idx_list.copy()
         new_idx_list.append(self.new_jobs_cnt)
+        if self.process_id is not None:
+            trigger.message["processs_id"] = self.process_id
+        if self.parent_job_id is not None:
+            trigger.message["parent_job_id"] = self.parent_job_id
         trigger.message["job_id"] = self.job_id
         trigger.message["op_id"] = (str)(uuid.uuid4())
         trigger.message["job_child_idx_list"] = new_idx_list
