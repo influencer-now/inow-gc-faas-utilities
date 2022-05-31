@@ -20,9 +20,9 @@ class FaasJob:
 
     name: str
     """name of FaaS Job"""
-    process_id: str
+    process_id: Optional[str]
     """tag for a process the FaaS Job is part of"""
-    parent_job_id: str
+    parent_job_id: Optional[str]
     """operation id of the FaaS Job triggered this (via callback)"""
     args: Optional[Any]
     """arguments given to FaaS Job when it is triggered"""

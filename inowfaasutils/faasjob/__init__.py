@@ -190,6 +190,7 @@ class FaasJobManager:
             upsert_job_id = self.job_id
 
         job_data.state = state
+        job_data.result = self.job_result
 
         if state == FaasOpState.ERR:
             err_data = self._generate_faas_error(job_name, err)
@@ -424,10 +425,8 @@ class FaasJobManager:
 
         new_idx_list = self.job_parent_idx_list.copy()
         new_idx_list.append(self.new_jobs_cnt)
-        if self.process_id is not None:
-            trigger.message["processs_id"] = self.process_id
-        if self.parent_job_id is not None:
-            trigger.message["parent_job_id"] = self.parent_job_id
+        trigger.message["processs_id"] = self.process_id
+        trigger.message["parent_job_id"] = self.parent_job_id
         trigger.message["job_id"] = self.job_id
         trigger.message["op_id"] = (str)(uuid.uuid4())
         trigger.message["job_child_idx_list"] = new_idx_list
