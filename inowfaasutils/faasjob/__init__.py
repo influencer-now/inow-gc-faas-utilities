@@ -425,7 +425,7 @@ class FaasJobManager:
 
         new_idx_list = self.job_parent_idx_list.copy()
         new_idx_list.append(self.new_jobs_cnt)
-        trigger.message["processs_id"] = self.process_id
+        trigger.message["process_id"] = self.process_id
         trigger.message["parent_job_id"] = self.parent_job_id
         trigger.message["job_id"] = self.job_id
         trigger.message["op_id"] = (str)(uuid.uuid4())
