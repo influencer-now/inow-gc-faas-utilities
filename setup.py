@@ -17,7 +17,7 @@ def _join_arrays(*args):
 
 setup(
     name="inowfaasutils",
-    version="0.0.16",
+    version="0.0.17",
     description="Influencer Now Google Cloud FaaS Utilities",
     author="Iván Huerta",
     author_email="contacto@influencernow.cl",
