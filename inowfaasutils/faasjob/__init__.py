@@ -410,7 +410,7 @@ class FaasJobManager:
     def finish_job(self, req: Request, root_job: FaasJob, status: FaasOpState):
         """Save a job done information in a firestore collection
         """
-        req.job_id = self.job_id
+        root_job.args["job_id"] = self.job_id
         if req.job_done_collection is not None:
             self._insert_job_done(req.job_done_collection, root_job.args, root_job.result, status)
 
